@@ -2,7 +2,7 @@
 name = "streamtabs"
 version = "0.1.0"
 edition = "2024"
-description = "Watch live terminal output in filter tabs."
+description = "Easy to follow noisy logs without rerunning commands"
 readme = "README.md"
 license = "MIT"
 keywords = ["terminal", "logs", "tui", "cli", "stream"]
