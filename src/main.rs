@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, IsTerminal, Read, Stdout, Write};
+use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::Duration;
@@ -471,6 +472,36 @@ fn is_ansi_final_byte(ch: char) -> bool {
     ('@'..='~').contains(&ch)
 }
 
+#[cfg(unix)]
+unsafe extern "C" {
+    fn wcwidth(ch: libc::wchar_t) -> libc::c_int;
+}
+
+#[cfg(unix)]
+fn ensure_locale_for_wcwidth() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let empty = b"\0";
+        // Respect LC_* / LANG so width for East Asian characters is computed correctly.
+        let _ = unsafe { libc::setlocale(libc::LC_CTYPE, empty.as_ptr().cast()) };
+    });
+}
+
+fn char_display_width(ch: char) -> usize {
+    #[cfg(unix)]
+    {
+        ensure_locale_for_wcwidth();
+        // `wcwidth` returns terminal column width for a Unicode scalar value.
+        let width = unsafe { wcwidth(ch as libc::wchar_t) };
+        if width < 0 { 0 } else { width as usize }
+    }
+
+    #[cfg(not(unix))]
+    {
+        if ch.is_control() { 0 } else { 1 }
+    }
+}
+
 fn clip_ansi_to_visible_width(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
@@ -501,13 +532,14 @@ fn clip_ansi_to_visible_width(text: &str, width: usize) -> String {
             continue;
         }
 
-        if visible >= width {
+        let ch_width = char_display_width(ch);
+        if ch_width > 0 && visible + ch_width > width {
             clipped = true;
             break;
         }
 
         out.push(ch);
-        visible += 1;
+        visible += ch_width;
     }
 
     if clipped && saw_ansi {
@@ -1045,6 +1077,9 @@ fn run() -> io::Result<()> {
         ));
     }
 
+    #[cfg(unix)]
+    ensure_locale_for_wcwidth();
+
     let binary = std::env::args()
         .next()
         .unwrap_or_else(|| "streamtabs".to_owned());
@@ -1320,6 +1355,13 @@ mod tests {
             clipped.replace("\u{1b}[2m", "").replace("\u{1b}[0m", ""),
             "2026-02-06"
         );
+    }
+
+    #[test]
+    fn ansi_clip_counts_wide_chars_by_display_width() {
+        let text = "\u{1b}[31m好A\u{1b}[0m";
+        let clipped = clip_ansi_to_visible_width(text, 2);
+        assert_eq!(strip_ansi(&clipped), "好");
     }
 
     #[test]
