@@ -2,6 +2,15 @@
 name = "streamtabs"
 version = "0.1.0"
 edition = "2024"
+description = "Watch live terminal output in filter tabs."
+readme = "README.md"
+license = "MIT"
+keywords = ["terminal", "logs", "tui", "cli", "stream"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "st"
+path = "src/main.rs"
 
 [dependencies]
 crossterm = "0.29"

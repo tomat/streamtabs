@@ -1,36 +1,41 @@
 # streamtabs
 
-`streamtabs` helps you watch live terminal output in filter tabs.
+This makes it easy to follow noisy logs without rerunning commands.
 
 You pipe text in, pass filters as arguments, and get:
 
 - tab `0`: `(all)` lines
 - tabs `1..N`: one tab per filter
 
-This makes it easy to follow noisy logs without rerunning commands.
+## Install
 
-## Quick Start
-
-Build once:
+From crates.io:
 
 ```bash
-cargo build --release
+cargo install streamtabs
 ```
+
+This installs both binaries:
+
+- `streamtabs`
+- `st` (short alias)
+
+## Quick Start
 
 Run with at least one filter:
 
 ```bash
-tail -f app.log | ./target/release/streamtabs error warn info
+tail -f app.log | st error warn info
 ```
 
 ## More Examples
 
 ```bash
-cat ./file.txt | ./target/release/streamtabs foo bar
+cat ./file.txt | st foo bar
 ```
 
 ```bash
-log stream --style compact | ./target/release/streamtabs Error Fault WindowServer
+log stream --style compact | st Error Fault WindowServer
 ```
 
 ## Controls
@@ -46,7 +51,7 @@ log stream --style compact | ./target/release/streamtabs Error Fault WindowServe
 ## Notes
 
 - Run in a terminal (`stdout` must be a TTY).
-- `streamtabs` requires at least one filter argument.
+- `st` requires at least one filter argument.
 - Each tab stores up to `5000` lines.
 
 ## Screenshots
