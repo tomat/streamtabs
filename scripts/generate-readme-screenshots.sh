@@ -197,7 +197,7 @@ if [[ "$LIVE_GIF" == "1" ]]; then
   for ((i = 0; i < LIVE_GIF_FRAMES; i++)); do
     printf -v frame_num '%03d' "$i"
     frame_path="$FRAME_DIR/live-$frame_num.png"
-    screencapture -x -l "$WINDOW_ID" "$frame_path"
+    screencapture -x -o -l "$WINDOW_ID" "$frame_path"
     if (( i == 0 )); then
       cp "$frame_path" "$OUT_DIR/live.png"
     fi
@@ -207,27 +207,27 @@ if [[ "$LIVE_GIF" == "1" ]]; then
   GIF_DELAY_CENTIS="$(awk -v delay="$LIVE_GIF_FRAME_DELAY" 'BEGIN { cs = int((delay * 100) + 0.5); if (cs < 1) cs = 1; print cs }')"
   magick "$FRAME_DIR"/live-*.png -set delay "$GIF_DELAY_CENTIS" -loop 0 -layers OptimizeTransparency -colors 128 "$OUT_DIR/live.gif"
 else
-  screencapture -x -l "$WINDOW_ID" "$OUT_DIR/live.png"
+  screencapture -x -o -l "$WINDOW_ID" "$OUT_DIR/live.png"
 fi
 
 send_key "3"
 sleep "$STATE_DELAY"
 refresh_title
-screencapture -x -l "$WINDOW_ID" "$OUT_DIR/filtered.png"
+screencapture -x -o -l "$WINDOW_ID" "$OUT_DIR/filtered.png"
 
 send_key "$ERROR_TAB_KEY"
 sleep "$STATE_DELAY"
 send_key "$SELECT_KEY"
 sleep "$SELECT_DELAY"
 refresh_title
-screencapture -x -l "$WINDOW_ID" "$OUT_DIR/selected.png"
+screencapture -x -o -l "$WINDOW_ID" "$OUT_DIR/selected.png"
 
 send_key " "
 sleep "$STATE_DELAY"
 send_key "$CONTEXT_TAB_KEY"
 sleep "$STATE_DELAY"
 refresh_title
-screencapture -x -l "$WINDOW_ID" "$OUT_DIR/selected-paused-switched.png"
+screencapture -x -o -l "$WINDOW_ID" "$OUT_DIR/selected-paused-switched.png"
 
 send_key "q"
 sleep 0.5
