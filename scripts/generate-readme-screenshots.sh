@@ -9,9 +9,9 @@ ROWS="${STREAMTABS_SCREENSHOT_ROWS:-30}"
 BOOT_DELAY="${STREAMTABS_SCREENSHOT_BOOT_DELAY:-24}"
 STATE_DELAY="${STREAMTABS_SCREENSHOT_STATE_DELAY:-1}"
 SELECT_DELAY="${STREAMTABS_SCREENSHOT_SELECT_DELAY:-0.25}"
-LIVE_GIF="${STREAMTABS_SCREENSHOT_LIVE_GIF:-1}"
-LIVE_GIF_FRAMES="${STREAMTABS_SCREENSHOT_LIVE_GIF_FRAMES:-18}"
-LIVE_GIF_FRAME_DELAY="${STREAMTABS_SCREENSHOT_LIVE_GIF_FRAME_DELAY:-0.12}"
+LIVE_WEBP="${STREAMTABS_SCREENSHOT_LIVE_WEBP:-1}"
+LIVE_WEBP_FRAMES="${STREAMTABS_SCREENSHOT_LIVE_WEBP_FRAMES:-18}"
+LIVE_WEBP_FRAME_DELAY="${STREAMTABS_SCREENSHOT_LIVE_WEBP_FRAME_DELAY:-0.12}"
 WINDOW_ID=""
 FRAME_DIR=""
 WINDOW_LEFT="${STREAMTABS_SCREENSHOT_WINDOW_LEFT:-80}"
@@ -118,7 +118,7 @@ if [[ ! -x "$ROOT_DIR/target/release/streamtabs" ]]; then
   exit 1
 fi
 
-if [[ "$LIVE_GIF" == "1" ]]; then
+if [[ "$LIVE_WEBP" == "1" ]]; then
   require_cmd magick
 fi
 
@@ -191,51 +191,52 @@ fi
 sleep "$BOOT_DELAY"
 refresh_title
 
-if [[ "$LIVE_GIF" == "1" ]]; then
+if [[ "$LIVE_WEBP" == "1" ]]; then
   FRAME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/streamtabs-live-frames.XXXXXX")"
 
-  for ((i = 0; i < LIVE_GIF_FRAMES; i++)); do
+  for ((i = 0; i < LIVE_WEBP_FRAMES; i++)); do
     printf -v frame_num '%03d' "$i"
     frame_path="$FRAME_DIR/live-$frame_num.png"
-    screencapture -x -o -l "$WINDOW_ID" "$frame_path"
-    if (( i == 0 )); then
-      cp "$frame_path" "$OUT_DIR/live.png"
-    fi
-    sleep "$LIVE_GIF_FRAME_DELAY"
+    screencapture -x -l "$WINDOW_ID" "$frame_path"
+    sleep "$LIVE_WEBP_FRAME_DELAY"
   done
 
-  GIF_DELAY_CENTIS="$(awk -v delay="$LIVE_GIF_FRAME_DELAY" 'BEGIN { cs = int((delay * 100) + 0.5); if (cs < 1) cs = 1; print cs }')"
-  magick "$FRAME_DIR"/live-*.png -set delay "$GIF_DELAY_CENTIS" -loop 0 -layers OptimizeTransparency -colors 128 "$OUT_DIR/live.gif"
+  WEBP_DELAY_CENTIS="$(awk -v delay="$LIVE_WEBP_FRAME_DELAY" 'BEGIN { cs = int((delay * 100) + 0.5); if (cs < 1) cs = 1; print cs }')"
+  magick "$FRAME_DIR"/live-*.png \
+    -set delay "$WEBP_DELAY_CENTIS" \
+    -loop 0 \
+    -quality 90 \
+    -define webp:method=6 \
+    "$OUT_DIR/live.webp"
 else
-  screencapture -x -o -l "$WINDOW_ID" "$OUT_DIR/live.png"
+  :
 fi
 
 send_key "3"
 sleep "$STATE_DELAY"
 refresh_title
-screencapture -x -o -l "$WINDOW_ID" "$OUT_DIR/filtered.png"
+screencapture -x -l "$WINDOW_ID" "$OUT_DIR/filtered.png"
 
 send_key "$ERROR_TAB_KEY"
 sleep "$STATE_DELAY"
 send_key "$SELECT_KEY"
 sleep "$SELECT_DELAY"
 refresh_title
-screencapture -x -o -l "$WINDOW_ID" "$OUT_DIR/selected.png"
+screencapture -x -l "$WINDOW_ID" "$OUT_DIR/selected.png"
 
 send_key " "
 sleep "$STATE_DELAY"
 send_key "$CONTEXT_TAB_KEY"
 sleep "$STATE_DELAY"
 refresh_title
-screencapture -x -o -l "$WINDOW_ID" "$OUT_DIR/selected-paused-switched.png"
+screencapture -x -l "$WINDOW_ID" "$OUT_DIR/selected-paused-switched.png"
 
 send_key "q"
 sleep 0.5
 
 echo "Updated screenshots:"
-echo "  $OUT_DIR/live.png"
-if [[ "$LIVE_GIF" == "1" ]]; then
-  echo "  $OUT_DIR/live.gif"
+if [[ "$LIVE_WEBP" == "1" ]]; then
+  echo "  $OUT_DIR/live.webp"
 fi
 echo "  $OUT_DIR/filtered.png"
 echo "  $OUT_DIR/selected.png"
