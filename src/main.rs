@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, IsTerminal, Read, Stdout, Write};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -29,7 +29,7 @@ enum UiMessage {
     TogglePause,
     ClearSelection,
     SelectMiddleVisibleLine,
-    MouseLeftDown { column: u16, row: u16 },
+    MouseLeftDown { column: u16, row: u16, shift: bool },
     Quit,
     Error(String),
 }
@@ -307,10 +307,12 @@ fn try_parse_sgr_mouse_message(sequence: &[u8]) -> Option<UiMessage> {
     let is_left_button = (cb & 0b11) == 0;
     let is_motion = (cb & 0b0010_0000) != 0;
     let is_wheel = (cb & 0b0100_0000) != 0;
+    let shift = (cb & 0b0000_0100) != 0;
     if is_left_button && !is_motion && !is_wheel {
         return Some(UiMessage::MouseLeftDown {
             column: col.saturating_sub(1),
             row: row.saturating_sub(1),
+            shift,
         });
     }
 
@@ -347,6 +349,12 @@ fn mark_tab_seen_live(tabs: &mut [Tab], index: usize) {
     }
 }
 
+fn mark_tabs_seen_live(tabs: &mut [Tab], active_tab_indices: &[usize]) {
+    for &index in active_tab_indices {
+        mark_tab_seen_live(tabs, index);
+    }
+}
+
 fn mark_tab_seen_paused(tabs: &mut [Tab], index: usize, pause_match_cutoffs: &[u64]) {
     if let Some(tab) = tabs.get_mut(index) {
         let cutoff = pause_match_cutoffs
@@ -357,9 +365,24 @@ fn mark_tab_seen_paused(tabs: &mut [Tab], index: usize, pause_match_cutoffs: &[u
     }
 }
 
+fn mark_tabs_seen_paused(
+    tabs: &mut [Tab],
+    active_tab_indices: &[usize],
+    pause_match_cutoffs: &[u64],
+) {
+    for &index in active_tab_indices {
+        mark_tab_seen_paused(tabs, index, pause_match_cutoffs);
+    }
+}
+
+fn is_tab_active(active_tab_indices: &[usize], tab_index: usize) -> bool {
+    active_tab_indices.binary_search(&tab_index).is_ok()
+}
+
 fn select_tab(
     tabs: &mut [Tab],
     active_index: &mut usize,
+    active_tab_indices: &mut Vec<usize>,
     next_index: usize,
     paused: bool,
     pause_snapshot: Option<&PauseSnapshot>,
@@ -369,20 +392,67 @@ fn select_tab(
     }
 
     *active_index = next_index;
+    active_tab_indices.clear();
+    active_tab_indices.push(next_index);
     if paused {
         if let Some(snapshot) = pause_snapshot {
-            mark_tab_seen_paused(tabs, *active_index, &snapshot.match_cutoffs);
+            mark_tabs_seen_paused(tabs, active_tab_indices, &snapshot.match_cutoffs);
         }
     } else {
-        mark_tab_seen_live(tabs, *active_index);
+        mark_tabs_seen_live(tabs, active_tab_indices);
     }
 }
 
-fn apply_line_to_tabs(tabs: &mut [Tab], active_index: usize, paused: bool, seq: u64, line: &str) {
+fn include_tab_in_or_view(
+    tabs: &mut [Tab],
+    active_index: &mut usize,
+    active_tab_indices: &mut Vec<usize>,
+    tab_index: usize,
+    paused: bool,
+    pause_snapshot: Option<&PauseSnapshot>,
+) {
+    if tab_index >= tabs.len() {
+        return;
+    }
+
+    match active_tab_indices.binary_search(&tab_index) {
+        Ok(existing_pos) => {
+            if active_tab_indices.len() > 1 {
+                active_tab_indices.remove(existing_pos);
+                if *active_index == tab_index {
+                    let fallback_pos = existing_pos.min(active_tab_indices.len() - 1);
+                    *active_index = active_tab_indices[fallback_pos];
+                }
+            } else {
+                *active_index = tab_index;
+            }
+        }
+        Err(insert_pos) => {
+            active_tab_indices.insert(insert_pos, tab_index);
+            *active_index = tab_index;
+        }
+    }
+
+    if paused {
+        if let Some(snapshot) = pause_snapshot {
+            mark_tabs_seen_paused(tabs, active_tab_indices, &snapshot.match_cutoffs);
+        }
+    } else {
+        mark_tabs_seen_live(tabs, active_tab_indices);
+    }
+}
+
+fn apply_line_to_tabs(
+    tabs: &mut [Tab],
+    active_tab_indices: &[usize],
+    paused: bool,
+    seq: u64,
+    line: &str,
+) {
     for (index, tab) in tabs.iter_mut().enumerate() {
         if tab.matches(line) {
             tab.push_line(seq, line);
-            if index == active_index && !paused {
+            if is_tab_active(active_tab_indices, index) && !paused {
                 tab.mark_seen_through(tab.total_matches);
             }
         }
@@ -453,7 +523,9 @@ fn strip_ansi(text: &str) -> String {
 
     while let Some(ch) = chars.next() {
         if ch == '\u{1b}' {
-            if let Some(next) = chars.next() && next == '[' {
+            if let Some(next) = chars.next()
+                && next == '['
+            {
                 for seq_char in chars.by_ref() {
                     if is_ansi_final_byte(seq_char) {
                         break;
@@ -571,22 +643,7 @@ fn draw_piece_clipped(
     Ok(())
 }
 
-fn prepare_visible_lines(
-    tab: &Tab,
-    cutoff_len: usize,
-    selected_line: Option<&SelectedLine>,
-) -> Vec<RenderedLine> {
-    let mut lines = tab
-        .lines
-        .iter()
-        .take(cutoff_len)
-        .map(|line| RenderedLine {
-            seq: line.seq,
-            text: line.text.clone(),
-            selected: false,
-        })
-        .collect::<Vec<_>>();
-
+fn inject_selected_line(lines: &mut Vec<RenderedLine>, selected_line: Option<&SelectedLine>) {
     if let Some(selected) = selected_line {
         if let Some(existing) = lines.iter_mut().find(|line| line.seq == selected.seq) {
             existing.selected = true;
@@ -605,7 +662,62 @@ fn prepare_visible_lines(
             );
         }
     }
+}
 
+#[cfg(test)]
+fn prepare_visible_lines(
+    tab: &Tab,
+    cutoff_len: usize,
+    selected_line: Option<&SelectedLine>,
+) -> Vec<RenderedLine> {
+    let mut lines = tab
+        .lines
+        .iter()
+        .take(cutoff_len)
+        .map(|line| RenderedLine {
+            seq: line.seq,
+            text: line.text.clone(),
+            selected: false,
+        })
+        .collect::<Vec<_>>();
+
+    inject_selected_line(&mut lines, selected_line);
+    lines
+}
+
+fn prepare_visible_lines_for_tabs(
+    tabs: &[Tab],
+    active_tab_indices: &[usize],
+    pause_line_cutoffs: Option<&[usize]>,
+    selected_line: Option<&SelectedLine>,
+) -> Vec<RenderedLine> {
+    let mut merged_lines = BTreeMap::new();
+
+    for &tab_index in active_tab_indices {
+        let Some(tab) = tabs.get(tab_index) else {
+            continue;
+        };
+
+        let cutoff_len = pause_line_cutoffs
+            .and_then(|cutoffs| cutoffs.get(tab_index).copied())
+            .unwrap_or(tab.lines.len())
+            .min(tab.lines.len());
+        for line in tab.lines.iter().take(cutoff_len) {
+            merged_lines
+                .entry(line.seq)
+                .or_insert_with(|| line.text.clone());
+        }
+    }
+
+    let mut lines = merged_lines
+        .into_iter()
+        .map(|(seq, text)| RenderedLine {
+            seq,
+            text,
+            selected: false,
+        })
+        .collect::<Vec<_>>();
+    inject_selected_line(&mut lines, selected_line);
     lines
 }
 
@@ -694,7 +806,7 @@ fn middle_visible_line(render_state: &RenderState) -> Option<&RenderedLine> {
 fn draw(
     stdout: &mut Stdout,
     tabs: &[Tab],
-    active_index: usize,
+    active_tab_indices: &[usize],
     paused: bool,
     pause_line_cutoffs: Option<&[usize]>,
     selected_line: Option<&SelectedLine>,
@@ -748,7 +860,7 @@ fn draw(
         let title_piece = fit_tab_title(&tab.label, title_budget);
 
         let right = x + inner_width as u16 + 1;
-        let border_color = if i == active_index {
+        let border_color = if is_tab_active(active_tab_indices, i) {
             Color::White
         } else {
             Color::DarkGrey
@@ -882,13 +994,8 @@ fn draw(
     }
 
     let body_height = rows_usize - body_start_row;
-    let active_tab = &tabs[active_index];
-    let cutoff_len = pause_line_cutoffs
-        .and_then(|cutoffs| cutoffs.get(active_index).copied())
-        .unwrap_or(active_tab.lines.len())
-        .min(active_tab.lines.len());
-
-    let visible_lines = prepare_visible_lines(active_tab, cutoff_len, selected_line);
+    let visible_lines =
+        prepare_visible_lines_for_tabs(tabs, active_tab_indices, pause_line_cutoffs, selected_line);
     let (start_index, visible_count, first_row) =
         viewport_for_lines(body_start_row, body_height, &visible_lines, paused);
 
@@ -955,6 +1062,7 @@ fn run() -> io::Result<()> {
     tabs.push(Tab::unfiltered());
     tabs.extend(filters.drain(..).map(Tab::new));
     let mut active_index = 0usize;
+    let mut active_tab_indices = vec![active_index];
     let mut next_seq = 0u64;
     let mut selected_line: Option<SelectedLine> = None;
 
@@ -977,7 +1085,7 @@ fn run() -> io::Result<()> {
             while let Ok(message) = rx.try_recv() {
                 match message {
                     InputMessage::Line(line) => {
-                        apply_line_to_tabs(&mut tabs, active_index, paused, next_seq, &line);
+                        apply_line_to_tabs(&mut tabs, &active_tab_indices, paused, next_seq, &line);
                         next_seq = next_seq.saturating_add(1);
                         if !paused {
                             dirty = true;
@@ -995,6 +1103,7 @@ fn run() -> io::Result<()> {
                         select_tab(
                             &mut tabs,
                             &mut active_index,
+                            &mut active_tab_indices,
                             next_index,
                             paused,
                             pause_snapshot.as_ref(),
@@ -1006,6 +1115,7 @@ fn run() -> io::Result<()> {
                             select_tab(
                                 &mut tabs,
                                 &mut active_index,
+                                &mut active_tab_indices,
                                 tab_index,
                                 paused,
                                 pause_snapshot.as_ref(),
@@ -1021,15 +1131,15 @@ fn run() -> io::Result<()> {
                                 match_cutoffs: tabs.iter().map(|tab| tab.total_matches).collect(),
                             });
                             if let Some(snapshot) = pause_snapshot.as_ref() {
-                                mark_tab_seen_paused(
+                                mark_tabs_seen_paused(
                                     &mut tabs,
-                                    active_index,
+                                    &active_tab_indices,
                                     &snapshot.match_cutoffs,
                                 );
                             }
                         } else {
                             pause_snapshot = None;
-                            mark_tab_seen_live(&mut tabs, active_index);
+                            mark_tabs_seen_live(&mut tabs, &active_tab_indices);
                         }
                         dirty = true;
                     }
@@ -1044,17 +1154,29 @@ fn run() -> io::Result<()> {
                             dirty = true;
                         }
                     }
-                    UiMessage::MouseLeftDown { column, row } => {
+                    UiMessage::MouseLeftDown { column, row, shift } => {
                         if let Some(tab_index) =
                             tab_index_at_position(&last_render_state, column, row)
                         {
-                            select_tab(
-                                &mut tabs,
-                                &mut active_index,
-                                tab_index,
-                                paused,
-                                pause_snapshot.as_ref(),
-                            );
+                            if shift {
+                                include_tab_in_or_view(
+                                    &mut tabs,
+                                    &mut active_index,
+                                    &mut active_tab_indices,
+                                    tab_index,
+                                    paused,
+                                    pause_snapshot.as_ref(),
+                                );
+                            } else {
+                                select_tab(
+                                    &mut tabs,
+                                    &mut active_index,
+                                    &mut active_tab_indices,
+                                    tab_index,
+                                    paused,
+                                    pause_snapshot.as_ref(),
+                                );
+                            }
                             dirty = true;
                             continue;
                         }
@@ -1082,7 +1204,7 @@ fn run() -> io::Result<()> {
                 last_render_state = draw(
                     &mut stdout,
                     &tabs,
-                    active_index,
+                    &active_tab_indices,
                     paused,
                     pause_snapshot
                         .as_ref()
@@ -1110,21 +1232,20 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        RenderedLine, SelectedLine, Tab, UiMessage, apply_line_to_tabs, clip_to_width,
-        clip_with_ellipsis, clip_ansi_to_visible_width, fit_tab_title, key_message_from_byte,
-        mark_tab_seen_live, mark_tab_seen_paused, middle_visible_line, prepare_visible_lines,
-        strip_ansi, toggle_selected_line,
-        try_parse_sgr_mouse_message,
-        viewport_for_lines,
+        RenderedLine, SelectedLine, Tab, UiMessage, apply_line_to_tabs, clip_ansi_to_visible_width,
+        clip_to_width, clip_with_ellipsis, fit_tab_title, include_tab_in_or_view,
+        key_message_from_byte, mark_tab_seen_live, mark_tab_seen_paused, middle_visible_line,
+        prepare_visible_lines, prepare_visible_lines_for_tabs, strip_ansi, toggle_selected_line,
+        try_parse_sgr_mouse_message, viewport_for_lines,
     };
 
     #[test]
     fn filters_are_applied_independently() {
         let mut tabs = vec![Tab::new("foo".into()), Tab::new("bar".into())];
 
-        apply_line_to_tabs(&mut tabs, 0, false, 0, "foo only");
-        apply_line_to_tabs(&mut tabs, 0, false, 1, "bar only");
-        apply_line_to_tabs(&mut tabs, 0, false, 2, "foo and bar");
+        apply_line_to_tabs(&mut tabs, &[0], false, 0, "foo only");
+        apply_line_to_tabs(&mut tabs, &[0], false, 1, "bar only");
+        apply_line_to_tabs(&mut tabs, &[0], false, 2, "foo and bar");
 
         assert_eq!(tabs[0].total_matches, 2);
         assert_eq!(tabs[1].total_matches, 2);
@@ -1151,8 +1272,8 @@ mod tests {
     fn unread_count_clears_when_tab_is_seen() {
         let mut tabs = vec![Tab::new("foo".into()), Tab::new("bar".into())];
 
-        apply_line_to_tabs(&mut tabs, 0, false, 0, "foo and bar");
-        apply_line_to_tabs(&mut tabs, 0, false, 1, "bar only");
+        apply_line_to_tabs(&mut tabs, &[0], false, 0, "foo and bar");
+        apply_line_to_tabs(&mut tabs, &[0], false, 1, "bar only");
         assert_eq!(tabs[1].unread_matches(), 2);
 
         mark_tab_seen_live(&mut tabs, 1);
@@ -1163,10 +1284,10 @@ mod tests {
     fn paused_switch_keeps_post_pause_unread() {
         let mut tabs = vec![Tab::new("foo".into()), Tab::new("bar".into())];
 
-        apply_line_to_tabs(&mut tabs, 0, false, 0, "bar before pause");
+        apply_line_to_tabs(&mut tabs, &[0], false, 0, "bar before pause");
         let pause_match_cutoffs = tabs.iter().map(|tab| tab.total_matches).collect::<Vec<_>>();
 
-        apply_line_to_tabs(&mut tabs, 0, true, 1, "bar after pause");
+        apply_line_to_tabs(&mut tabs, &[0], true, 1, "bar after pause");
         assert_eq!(tabs[1].unread_matches(), 2);
 
         mark_tab_seen_paused(&mut tabs, 1, &pause_match_cutoffs);
@@ -1177,10 +1298,10 @@ mod tests {
     fn active_tab_accumulates_unread_while_paused() {
         let mut tabs = vec![Tab::new("foo".into()), Tab::new("bar".into())];
 
-        apply_line_to_tabs(&mut tabs, 0, false, 0, "foo visible");
+        apply_line_to_tabs(&mut tabs, &[0], false, 0, "foo visible");
         assert_eq!(tabs[0].unread_matches(), 0);
 
-        apply_line_to_tabs(&mut tabs, 0, true, 1, "foo hidden while paused");
+        apply_line_to_tabs(&mut tabs, &[0], true, 1, "foo hidden while paused");
         assert_eq!(tabs[0].unread_matches(), 1);
     }
 
@@ -1195,7 +1316,10 @@ mod tests {
     fn ansi_clip_uses_visible_width() {
         let text = "\u{1b}[2m2026-02-06\u{1b}[0m INFO module message";
         let clipped = clip_ansi_to_visible_width(text, 10);
-        assert_eq!(clipped.replace("\u{1b}[2m", "").replace("\u{1b}[0m", ""), "2026-02-06");
+        assert_eq!(
+            clipped.replace("\u{1b}[2m", "").replace("\u{1b}[0m", ""),
+            "2026-02-06"
+        );
     }
 
     #[test]
@@ -1282,7 +1406,19 @@ mod tests {
     fn sgr_mouse_parser_decodes_left_click() {
         assert!(matches!(
             try_parse_sgr_mouse_message(b"<0;12;7M"),
-            Some(UiMessage::MouseLeftDown { column: 11, row: 6 })
+            Some(UiMessage::MouseLeftDown {
+                column: 11,
+                row: 6,
+                shift: false
+            })
+        ));
+        assert!(matches!(
+            try_parse_sgr_mouse_message(b"<4;12;7M"),
+            Some(UiMessage::MouseLeftDown {
+                column: 11,
+                row: 6,
+                shift: true
+            })
         ));
         assert!(try_parse_sgr_mouse_message(b"<35;12;7M").is_none());
         assert!(try_parse_sgr_mouse_message(b"<64;12;7M").is_none());
@@ -1305,6 +1441,54 @@ mod tests {
         assert_eq!(visible[1].text, "picked elsewhere");
         assert!(visible[1].selected);
         assert_eq!(visible[2].seq, 3);
+    }
+
+    #[test]
+    fn or_view_merges_matching_tabs_without_duplicates() {
+        let mut tabs = vec![Tab::new("foo".into()), Tab::new("bar".into())];
+
+        apply_line_to_tabs(&mut tabs, &[0], false, 0, "foo only");
+        apply_line_to_tabs(&mut tabs, &[0], false, 1, "bar only");
+        apply_line_to_tabs(&mut tabs, &[0], false, 2, "foo and bar");
+
+        let visible = prepare_visible_lines_for_tabs(&tabs, &[0, 1], None, None);
+        let seqs = visible.iter().map(|line| line.seq).collect::<Vec<_>>();
+        assert_eq!(seqs, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn shift_click_toggles_tab_membership_when_multiple_tabs_active() {
+        let mut tabs = vec![
+            Tab::unfiltered(),
+            Tab::new("foo".into()),
+            Tab::new("bar".into()),
+        ];
+        let mut active_index = 1usize;
+        let mut active_tab_indices = vec![0usize, 1usize];
+
+        include_tab_in_or_view(
+            &mut tabs,
+            &mut active_index,
+            &mut active_tab_indices,
+            1,
+            false,
+            None,
+        );
+
+        assert_eq!(active_tab_indices, vec![0]);
+        assert_eq!(active_index, 0);
+
+        include_tab_in_or_view(
+            &mut tabs,
+            &mut active_index,
+            &mut active_tab_indices,
+            0,
+            false,
+            None,
+        );
+
+        assert_eq!(active_tab_indices, vec![0]);
+        assert_eq!(active_index, 0);
     }
 
     #[test]

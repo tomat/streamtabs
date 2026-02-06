@@ -1,6 +1,6 @@
 [package]
 name = "streamtabs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Easy to follow noisy logs without rerunning commands"
 readme = "README.md"

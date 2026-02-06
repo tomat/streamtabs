@@ -45,6 +45,7 @@ log stream --style compact | st Error Fault WindowServer
 - `Space`: pause/resume
 - `q` or `Ctrl+C`: quit
 - Mouse click tab: switch tabs
+- Shift+mouse click tab: toggle that tab in the current OR view
 - Mouse click line: highlight that line across tabs
 - `d`: cancel highlighted line
 
