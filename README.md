@@ -53,7 +53,7 @@ log stream --style compact | ./target/release/streamtabs Error Fault WindowServe
 
 Live stream:
 
-![Live stream screenshot](docs/screenshots/live.png)
+![Live stream screenshot](docs/screenshots/live.gif)
 
 Filtered tab selected (`3` = `INFO`):
 

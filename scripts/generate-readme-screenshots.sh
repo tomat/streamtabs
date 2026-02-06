@@ -9,7 +9,11 @@ ROWS="${STREAMTABS_SCREENSHOT_ROWS:-30}"
 BOOT_DELAY="${STREAMTABS_SCREENSHOT_BOOT_DELAY:-24}"
 STATE_DELAY="${STREAMTABS_SCREENSHOT_STATE_DELAY:-1}"
 SELECT_DELAY="${STREAMTABS_SCREENSHOT_SELECT_DELAY:-0.25}"
+LIVE_GIF="${STREAMTABS_SCREENSHOT_LIVE_GIF:-1}"
+LIVE_GIF_FRAMES="${STREAMTABS_SCREENSHOT_LIVE_GIF_FRAMES:-18}"
+LIVE_GIF_FRAME_DELAY="${STREAMTABS_SCREENSHOT_LIVE_GIF_FRAME_DELAY:-0.12}"
 WINDOW_ID=""
+FRAME_DIR=""
 WINDOW_LEFT="${STREAMTABS_SCREENSHOT_WINDOW_LEFT:-80}"
 WINDOW_TOP="${STREAMTABS_SCREENSHOT_WINDOW_TOP:-60}"
 WINDOW_RIGHT="${STREAMTABS_SCREENSHOT_WINDOW_RIGHT:-1480}"
@@ -29,6 +33,10 @@ require_cmd() {
 }
 
 cleanup() {
+  if [[ -n "${FRAME_DIR}" && -d "${FRAME_DIR}" ]]; then
+    rm -rf "${FRAME_DIR}"
+  fi
+
   if [[ -n "${WINDOW_ID}" ]]; then
     osascript <<OSA >/dev/null 2>&1 || true
 tell application "$APP"
@@ -110,6 +118,10 @@ if [[ ! -x "$ROOT_DIR/target/release/streamtabs" ]]; then
   exit 1
 fi
 
+if [[ "$LIVE_GIF" == "1" ]]; then
+  require_cmd magick
+fi
+
 WINDOW_ID="$(osascript <<OSA
 tell application "$APP"
   activate
@@ -178,7 +190,25 @@ fi
 
 sleep "$BOOT_DELAY"
 refresh_title
-screencapture -x -l "$WINDOW_ID" "$OUT_DIR/live.png"
+
+if [[ "$LIVE_GIF" == "1" ]]; then
+  FRAME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/streamtabs-live-frames.XXXXXX")"
+
+  for ((i = 0; i < LIVE_GIF_FRAMES; i++)); do
+    printf -v frame_num '%03d' "$i"
+    frame_path="$FRAME_DIR/live-$frame_num.png"
+    screencapture -x -l "$WINDOW_ID" "$frame_path"
+    if (( i == 0 )); then
+      cp "$frame_path" "$OUT_DIR/live.png"
+    fi
+    sleep "$LIVE_GIF_FRAME_DELAY"
+  done
+
+  GIF_DELAY_CENTIS="$(awk -v delay="$LIVE_GIF_FRAME_DELAY" 'BEGIN { cs = int((delay * 100) + 0.5); if (cs < 1) cs = 1; print cs }')"
+  magick "$FRAME_DIR"/live-*.png -set delay "$GIF_DELAY_CENTIS" -loop 0 -layers OptimizeTransparency -colors 128 "$OUT_DIR/live.gif"
+else
+  screencapture -x -l "$WINDOW_ID" "$OUT_DIR/live.png"
+fi
 
 send_key "3"
 sleep "$STATE_DELAY"
@@ -204,6 +234,9 @@ sleep 0.5
 
 echo "Updated screenshots:"
 echo "  $OUT_DIR/live.png"
+if [[ "$LIVE_GIF" == "1" ]]; then
+  echo "  $OUT_DIR/live.gif"
+fi
 echo "  $OUT_DIR/filtered.png"
 echo "  $OUT_DIR/selected.png"
 echo "  $OUT_DIR/selected-paused-switched.png"
