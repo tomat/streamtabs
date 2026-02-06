@@ -7,6 +7,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["terminal", "logs", "tui", "cli", "stream"]
 categories = ["command-line-utilities"]
+include = ["src/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
 
 [[bin]]
 name = "st"
