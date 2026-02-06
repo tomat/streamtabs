@@ -8,15 +8,18 @@ COLS="${STREAMTABS_SCREENSHOT_COLS:-120}"
 ROWS="${STREAMTABS_SCREENSHOT_ROWS:-30}"
 BOOT_DELAY="${STREAMTABS_SCREENSHOT_BOOT_DELAY:-24}"
 STATE_DELAY="${STREAMTABS_SCREENSHOT_STATE_DELAY:-1}"
+SELECT_DELAY="${STREAMTABS_SCREENSHOT_SELECT_DELAY:-0.25}"
 WINDOW_ID=""
 WINDOW_LEFT="${STREAMTABS_SCREENSHOT_WINDOW_LEFT:-80}"
 WINDOW_TOP="${STREAMTABS_SCREENSHOT_WINDOW_TOP:-60}"
 WINDOW_RIGHT="${STREAMTABS_SCREENSHOT_WINDOW_RIGHT:-1480}"
 WINDOW_BOTTOM="${STREAMTABS_SCREENSHOT_WINDOW_BOTTOM:-980}"
-WINDOW_TITLE="${STREAMTABS_SCREENSHOT_WINDOW_TITLE:-streamtabs}"
-LINE_CLICK_X="${STREAMTABS_SCREENSHOT_LINE_CLICK_X:-$((WINDOW_LEFT + 360))}"
-LINE_CLICK_Y="${STREAMTABS_SCREENSHOT_LINE_CLICK_Y:-$((WINDOW_BOTTOM - 90))}"
-SWITCH_TAB_KEY="${STREAMTABS_SCREENSHOT_SWITCH_TAB_KEY:-0}"
+WINDOW_TITLE="${STREAMTABS_SCREENSHOT_WINDOW_TITLE:-}"
+WINDOW_TITLE_PAD="${STREAMTABS_SCREENSHOT_WINDOW_TITLE_PAD:-220}"
+SELECT_KEY="${STREAMTABS_SCREENSHOT_SELECT_KEY:-s}"
+ERROR_TAB_KEY="${STREAMTABS_SCREENSHOT_ERROR_TAB_KEY:-1}"
+CONTEXT_TAB_KEY="${STREAMTABS_SCREENSHOT_CONTEXT_TAB_KEY:-4}"
+printf -v WINDOW_TITLE_PADDED "%s%*s" "$WINDOW_TITLE" "$WINDOW_TITLE_PAD" ""
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -51,13 +54,45 @@ end tell
 OSA
 }
 
-click_at() {
-  local x="$1"
-  local y="$2"
+refresh_title() {
   osascript <<OSA >/dev/null
-tell application "$APP" to activate
-tell application "System Events"
-  click at {$x, $y}
+tell application "$APP"
+  try
+    set title displays custom title of front window to false
+  end try
+  try
+    set title displays shell path of front window to false
+  end try
+  try
+    set title displays device name of front window to false
+  end try
+  try
+    set title displays window size of front window to false
+  end try
+  try
+    set title displays settings name of front window to false
+  end try
+  try
+    set custom title of front window to ""
+  end try
+  try
+    set custom title of selected tab of front window to "$WINDOW_TITLE_PADDED"
+  end try
+  try
+    set title displays custom title of selected tab of front window to true
+  end try
+  try
+    set title displays shell path of selected tab of front window to false
+  end try
+  try
+    set title displays device name of selected tab of front window to false
+  end try
+  try
+    set title displays window size of selected tab of front window to false
+  end try
+  try
+    set title displays file name of selected tab of front window to false
+  end try
 end tell
 OSA
 }
@@ -81,17 +116,25 @@ tell application "$APP"
   do script "cd '$ROOT_DIR'; RUST_LOG_COLOR=always ./scripts/fake-rust-logs.sh | ./target/release/streamtabs ERROR WARN INFO DEBUG"
   set bounds of front window to {$WINDOW_LEFT, $WINDOW_TOP, $WINDOW_RIGHT, $WINDOW_BOTTOM}
   try
-    set custom title of front window to "$WINDOW_TITLE"
+    set title displays custom title of front window to false
   end try
   try
-    set custom title of selected tab of front window to "$WINDOW_TITLE"
-  end try
-  try
-    set title displays custom title of front window to true
     set title displays shell path of front window to false
+  end try
+  try
     set title displays device name of front window to false
+  end try
+  try
     set title displays window size of front window to false
+  end try
+  try
     set title displays settings name of front window to false
+  end try
+  try
+    set custom title of front window to ""
+  end try
+  try
+    set custom title of selected tab of front window to "$WINDOW_TITLE_PADDED"
   end try
   try
     set title displays custom title of settings set of front window to true
@@ -99,6 +142,13 @@ tell application "$APP"
     set title displays device name of settings set of front window to false
     set title displays window size of settings set of front window to false
     set title displays settings name of settings set of front window to false
+  end try
+  try
+    set title displays custom title of selected tab of front window to true
+    set title displays shell path of selected tab of front window to false
+    set title displays device name of selected tab of front window to false
+    set title displays window size of selected tab of front window to false
+    set title displays file name of selected tab of front window to false
   end try
   try
     set number of columns of front window to $COLS
@@ -127,20 +177,26 @@ if [[ -z "$WINDOW_ID" ]]; then
 fi
 
 sleep "$BOOT_DELAY"
+refresh_title
 screencapture -x -l "$WINDOW_ID" "$OUT_DIR/live.png"
 
 send_key "3"
 sleep "$STATE_DELAY"
+refresh_title
 screencapture -x -l "$WINDOW_ID" "$OUT_DIR/filtered.png"
 
-click_at "$LINE_CLICK_X" "$LINE_CLICK_Y"
+send_key "$ERROR_TAB_KEY"
 sleep "$STATE_DELAY"
+send_key "$SELECT_KEY"
+sleep "$SELECT_DELAY"
+refresh_title
 screencapture -x -l "$WINDOW_ID" "$OUT_DIR/selected.png"
 
-send_key "$SWITCH_TAB_KEY"
-sleep "$STATE_DELAY"
 send_key " "
 sleep "$STATE_DELAY"
+send_key "$CONTEXT_TAB_KEY"
+sleep "$STATE_DELAY"
+refresh_title
 screencapture -x -l "$WINDOW_ID" "$OUT_DIR/selected-paused-switched.png"
 
 send_key "q"

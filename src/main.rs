@@ -28,6 +28,7 @@ enum UiMessage {
     SelectTab(usize),
     TogglePause,
     ClearSelection,
+    SelectMiddleVisibleLine,
     MouseLeftDown { column: u16, row: u16 },
     Quit,
     Error(String),
@@ -282,6 +283,7 @@ fn key_message_from_byte(byte: u8) -> Option<UiMessage> {
         b'0' => Some(UiMessage::SelectTab(0)),
         b' ' => Some(UiMessage::TogglePause),
         b'd' | b'D' => Some(UiMessage::ClearSelection),
+        b's' | b'S' => Some(UiMessage::SelectMiddleVisibleLine),
         b'q' | b'Q' | 0x03 => Some(UiMessage::Quit),
         _ => None,
     }
@@ -676,6 +678,19 @@ fn toggle_selected_line(selected_line: &mut Option<SelectedLine>, line: &Rendere
     }
 }
 
+fn middle_visible_line(render_state: &RenderState) -> Option<&RenderedLine> {
+    let visible_lines = render_state
+        .line_rows
+        .iter()
+        .filter_map(|line| line.as_ref())
+        .collect::<Vec<_>>();
+    if visible_lines.is_empty() {
+        return None;
+    }
+
+    visible_lines.get(visible_lines.len() / 2).copied()
+}
+
 fn draw(
     stdout: &mut Stdout,
     tabs: &[Tab],
@@ -1023,6 +1038,12 @@ fn run() -> io::Result<()> {
                             dirty = true;
                         }
                     }
+                    UiMessage::SelectMiddleVisibleLine => {
+                        if let Some(line) = middle_visible_line(&last_render_state) {
+                            toggle_selected_line(&mut selected_line, line);
+                            dirty = true;
+                        }
+                    }
                     UiMessage::MouseLeftDown { column, row } => {
                         if let Some(tab_index) =
                             tab_index_at_position(&last_render_state, column, row)
@@ -1091,8 +1112,8 @@ mod tests {
     use super::{
         RenderedLine, SelectedLine, Tab, UiMessage, apply_line_to_tabs, clip_to_width,
         clip_with_ellipsis, clip_ansi_to_visible_width, fit_tab_title, key_message_from_byte,
-        mark_tab_seen_live, mark_tab_seen_paused, prepare_visible_lines, strip_ansi,
-        toggle_selected_line,
+        mark_tab_seen_live, mark_tab_seen_paused, middle_visible_line, prepare_visible_lines,
+        strip_ansi, toggle_selected_line,
         try_parse_sgr_mouse_message,
         viewport_for_lines,
     };
@@ -1244,6 +1265,14 @@ mod tests {
             key_message_from_byte(b'D'),
             Some(UiMessage::ClearSelection)
         ));
+        assert!(matches!(
+            key_message_from_byte(b's'),
+            Some(UiMessage::SelectMiddleVisibleLine)
+        ));
+        assert!(matches!(
+            key_message_from_byte(b'S'),
+            Some(UiMessage::SelectMiddleVisibleLine)
+        ));
         assert!(matches!(key_message_from_byte(b'q'), Some(UiMessage::Quit)));
         assert!(matches!(key_message_from_byte(0x03), Some(UiMessage::Quit)));
         assert!(key_message_from_byte(b'\n').is_none());
@@ -1310,5 +1339,31 @@ mod tests {
 
         toggle_selected_line(&mut selected, &clicked);
         assert_eq!(selected.as_ref().map(|line| line.seq), Some(42));
+    }
+
+    #[test]
+    fn middle_visible_line_picks_middle_rendered_row() {
+        let mut render_state = super::RenderState {
+            tab_hitboxes: Vec::new(),
+            line_rows: vec![None; 8],
+        };
+        render_state.line_rows[2] = Some(RenderedLine {
+            seq: 10,
+            text: "a".to_owned(),
+            selected: false,
+        });
+        render_state.line_rows[3] = Some(RenderedLine {
+            seq: 20,
+            text: "b".to_owned(),
+            selected: false,
+        });
+        render_state.line_rows[4] = Some(RenderedLine {
+            seq: 30,
+            text: "c".to_owned(),
+            selected: false,
+        });
+
+        let picked = middle_visible_line(&render_state).expect("middle line should exist");
+        assert_eq!(picked.seq, 20);
     }
 }
