@@ -1,0 +1,5 @@
+/target
+/.idea
+/.vscode
+.DS_Store
+docs/screenshots/*.txt
